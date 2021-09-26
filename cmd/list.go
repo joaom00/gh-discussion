@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	// "github.com/cli/browser"
 	"github.com/joaom00/gh-discussions/gh"
-	// "github.com/ktr0731/go-fuzzyfinder"
 	"github.com/spf13/cobra"
 )
 
