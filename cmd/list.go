@@ -1,32 +1,17 @@
 package cmd
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
+	"log"
 	"strings"
 
-	"github.com/joaom00/gh-discussions/gh"
+	tea "github.com/charmbracelet/bubbletea"
+	gh "github.com/cli/go-gh"
+	graphql "github.com/cli/shurcooL-graphql"
+	"github.com/joaom00/gh-discussions/ui"
+
 	"github.com/spf13/cobra"
 )
-
-type Node struct {
-	Title  string
-	URL    string
-	Author struct {
-		Login string
-	}
-}
-
-type discussionsResponse struct {
-	Data struct {
-		Repository struct {
-			Discussions struct {
-				Nodes []Node
-			}
-		}
-	}
-}
 
 type listOptions struct {
 	Repository string
@@ -38,14 +23,16 @@ func NewListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List of discussions of a repository",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			if opts.Repository == "" {
-				repo, err := resolveRepository()
+				// repo, err := resolveRepository()
+				repo, err := gh.CurrentRepository()
 				if err != nil {
 					return err
 				}
-				opts.Repository = repo
+				opts.Repository = fmt.Sprintf("%s/%s", repo.Owner(), repo.Name())
 			}
+
 			return listRun(opts)
 
 		},
@@ -57,90 +44,62 @@ func NewListCmd() *cobra.Command {
 	return cmd
 }
 
-func resolveRepository() (string, error) {
-	cmdArgs := []string{
-		"repo", "view",
-	}
-
-	out, eout, err := gh.Command(cmdArgs...)
-	if err != nil {
-		if strings.Contains(eout.String(), "not a git repository") {
-			return "", errors.New("Try running this command from inside a git repository or with the -R flag")
-		}
-		return "", err
-	}
-
-	viewOut := strings.Split(out.String(), "\n")[0]
-	repo := strings.TrimSpace(strings.Split(viewOut, ":")[1])
-
-	return repo, nil
-
-}
-
 func listRun(opts listOptions) error {
-	query := `query($owner: String!, $name: String!, $first: Int!) { 
-	repository(owner: $owner, name: $name) {
-        discussions(first: $first) {
-            nodes {
-                title
-                url
-                author {
-                    login
-                }
-            }
-        }
-    }
-}`
-
-	ownerName := strings.Split(opts.Repository, "/")
-
-	if opts.Limit > 100 {
-		opts.Limit = 100
-	}
-
-	cmdArgs := []string{
-		"api", "graphql",
-		"-F", fmt.Sprintf("owner=%s", ownerName[0]),
-		"-F", fmt.Sprintf("name=%s", ownerName[1]),
-		"-F", fmt.Sprintf("first=%d", opts.Limit),
-		"-f", fmt.Sprintf("query=%s", query),
-	}
-
-	out, _, err := gh.Command(cmdArgs...)
+	client, err := gh.GQLClient(nil)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
-	var resp discussionsResponse
-	err = json.Unmarshal(out.Bytes(), &resp)
+	var query struct {
+		Repository struct {
+			Discussions struct {
+				Nodes []ui.Discussion
+			} `graphql:"discussions(first: $first)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	s := strings.Split(opts.Repository, "/")
+	owner, name := s[0], s[1]
+
+	variables := map[string]interface{}{
+		"first": graphql.Int(opts.Limit),
+		"owner": graphql.String(owner),
+		"name":  graphql.String(name),
+	}
+
+	err = client.Query("Discussions", &query, variables)
 	if err != nil {
-		return fmt.Errorf("failed to deserialize JSON: %w", err)
+		log.Fatal(err)
 	}
 
-	nodes := resp.Data.Repository.Discussions.Nodes
+	nodes := query.Repository.Discussions.Nodes
 	if len(nodes) == 0 {
 		fmt.Printf("There are no discussions in %s\n", opts.Repository)
 		return nil
 	}
 
-	for _, v := range nodes {
-		fmt.Printf("%s\t\t%s\n", v.Author.Login, v.Title)
+	model := ui.NewModel(&nodes)
+
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if err := p.Start(); err != nil {
+		log.Fatal(err)
 	}
 
-	// idx, err := fuzzyfinder.Find(
-	// 	nodes,
-	// 	func(i int) string {
-	// 		return nodes[i].Title
-	// 	},
-	// )
-	// if err != nil {
-	// 	return err
+	// items := []list.Item{}
+
+	// for _, v := range nodes {
+	// 	items = append(items, item{title: v.Title, desc: v.Author.Login})
 	// }
 
-	// fmt.Printf("Opening %s in your browser\n", nodes[idx].URL)
-	// err = browser.OpenURL(nodes[idx].URL)
-	// if err != nil {
-	// 	return err
+	// d := list.NewDefaultDelegate()
+
+	// m := ui.Model{List: list.New(items, d, 0, 0)}
+
+	// p := tea.NewProgram(m, tea.WithAltScreen())
+
+	// if err := p.Start(); err != nil {
+	// 	fmt.Println("Error running program:", err)
+	// 	os.Exit(1)
 	// }
 
 	return nil

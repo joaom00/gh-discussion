@@ -7,6 +7,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type Teste struct {
+	Title    string
+	Subtitle string
+}
+
 func rootCmd() *cobra.Command {
 	return &cobra.Command{
 		Use: "discussion",
